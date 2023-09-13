@@ -20,6 +20,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -82,6 +84,7 @@ const (
 	errGetConnectionDetails = "cannot get connection details"
 	errGetValueAtFieldPath  = "cannot get value at fieldPath"
 	errDecodeSecretData     = "cannot decode secret data"
+	errFailedToParseProxy   = "failed to parse proxy url"
 )
 
 // Setup adds a controller that reconciles Object managed resources.
@@ -99,6 +102,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 			kcfgExtractorFn: resource.CommonCredentialExtractor,
 			gcpExtractorFn:  resource.CommonCredentialExtractor,
 			gcpInjectorFn:   gke.WrapRESTConfig,
+			parseURLFn:      url.Parse,
 			newRESTConfigFn: clients.NewRESTConfig,
 			newKubeClientFn: clients.NewKubeClient,
 		}),
@@ -123,6 +127,7 @@ type connector struct {
 	kcfgExtractorFn func(ctx context.Context, src xpv1.CredentialsSource, c client.Client, ccs xpv1.CommonCredentialSelectors) ([]byte, error)
 	gcpExtractorFn  func(ctx context.Context, src xpv1.CredentialsSource, c client.Client, ccs xpv1.CommonCredentialSelectors) ([]byte, error)
 	gcpInjectorFn   func(ctx context.Context, rc *rest.Config, credentials []byte, scopes ...string) error
+	parseURLFn      func(str string) (url *url.URL, err error)
 	newRESTConfigFn func(kubeconfig []byte) (*rest.Config, error)
 	newKubeClientFn func(config *rest.Config) (client.Client, error)
 }
@@ -177,6 +182,14 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		if err := c.gcpInjectorFn(ctx, rc, creds, gke.DefaultScopes...); err != nil {
 			return nil, errors.Wrap(err, errFailedToInjectGoogleCredentials)
 		}
+	}
+
+	if proxy := pc.Spec.Proxy; proxy != "" {
+		u, err := c.parseURLFn(proxy)
+		if err != nil {
+			return nil, errors.Wrap(err, errFailedToParseProxy)
+		}
+		rc.Proxy = http.ProxyURL(u)
 	}
 
 	k, err := c.newKubeClientFn(rc)
