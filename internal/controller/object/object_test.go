@@ -20,9 +20,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"testing"
-	"time"
-
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/pkg/errors"
@@ -34,7 +31,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/pointer"
+	"net/url"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"testing"
+	"time"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
@@ -215,6 +215,7 @@ func providerConfig(pm ...providerConfigModifier) *kubernetesv1alpha1.ProviderCo
 			Identity: &kubernetesv1alpha1.Identity{
 				Type: kubernetesv1alpha1.IdentityTypeGoogleApplicationCredentials,
 			},
+			Proxy: "10.0.0.0",
 		},
 	}
 
@@ -236,6 +237,7 @@ func Test_connector_Connect(t *testing.T) {
 		kcfgExtractorFn func(ctx context.Context, src xpv1.CredentialsSource, c client.Client, ccs xpv1.CommonCredentialSelectors) ([]byte, error)
 		gcpExtractorFn  func(ctx context.Context, src xpv1.CredentialsSource, c client.Client, ccs xpv1.CommonCredentialSelectors) ([]byte, error)
 		gcpInjectorFn   func(ctx context.Context, rc *rest.Config, credentials []byte, scopes ...string) error
+		parseURLFn      func(str string) (url *url.URL, err error)
 		newRESTConfigFn func(kubeconfig []byte) (*rest.Config, error)
 		newKubeClientFn func(config *rest.Config) (client.Client, error)
 		usage           resource.Tracker
@@ -401,6 +403,43 @@ func Test_connector_Connect(t *testing.T) {
 				err: errors.Wrap(errBoom, errFailedToInjectGoogleCredentials),
 			},
 		},
+		"FailedToParseProxyURL": {
+			args: args{
+				client: &test.MockClient{
+					MockGet: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+						if key.Name == providerName {
+							*obj.(*kubernetesv1alpha1.ProviderConfig) = *providerConfig()
+							return nil
+						}
+						if key.Name == providerSecretName && key.Namespace == providerSecretNamespace {
+							*obj.(*corev1.Secret) = secret
+							return nil
+						}
+						return errBoom
+					},
+				},
+				kcfgExtractorFn: func(ctx context.Context, src xpv1.CredentialsSource, c client.Client, ccs xpv1.CommonCredentialSelectors) ([]byte, error) {
+					return nil, nil
+				},
+				newRESTConfigFn: func(kubeconfig []byte) (config *rest.Config, err error) {
+					return nil, nil
+				},
+				gcpExtractorFn: func(ctx context.Context, src xpv1.CredentialsSource, c client.Client, ccs xpv1.CommonCredentialSelectors) ([]byte, error) {
+					return nil, nil
+				},
+				gcpInjectorFn: func(ctx context.Context, rc *rest.Config, credentials []byte, scopes ...string) error {
+					return nil
+				},
+				parseURLFn: func(str string) (url *url.URL, err error) {
+					return nil, errBoom
+				},
+				usage: resource.TrackerFn(func(ctx context.Context, mg resource.Managed) error { return nil }),
+				mg:    kubernetesObject(),
+			},
+			want: want{
+				err: errors.Wrap(errBoom, errFailedToParseProxy),
+			},
+		},
 		"FailedToCreateNewKubernetesClient": {
 			args: args{
 				client: &test.MockClient{
@@ -431,6 +470,9 @@ func Test_connector_Connect(t *testing.T) {
 				},
 				gcpInjectorFn: func(ctx context.Context, rc *rest.Config, credentials []byte, scopes ...string) error {
 					return nil
+				},
+				parseURLFn: func(str string) (url *url.URL, err error) {
+					return nil, nil
 				},
 				newKubeClientFn: func(config *rest.Config) (c client.Client, err error) {
 					return nil, errBoom
@@ -472,6 +514,9 @@ func Test_connector_Connect(t *testing.T) {
 				gcpInjectorFn: func(ctx context.Context, rc *rest.Config, credentials []byte, scopes ...string) error {
 					return nil
 				},
+				parseURLFn: func(str string) (url *url.URL, err error) {
+					return nil, nil
+				},
 				newKubeClientFn: func(config *rest.Config) (c client.Client, err error) {
 					return &test.MockClient{}, nil
 				},
@@ -491,6 +536,7 @@ func Test_connector_Connect(t *testing.T) {
 				kcfgExtractorFn: tc.args.kcfgExtractorFn,
 				gcpExtractorFn:  tc.args.gcpExtractorFn,
 				gcpInjectorFn:   tc.args.gcpInjectorFn,
+				parseURLFn:      tc.args.parseURLFn,
 				newRESTConfigFn: tc.args.newRESTConfigFn,
 				newKubeClientFn: tc.args.newKubeClientFn,
 				usage:           tc.usage,
